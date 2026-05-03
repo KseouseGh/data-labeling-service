@@ -1,0 +1,68 @@
+version: '3.8'
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: raglabel_redis
+    restart: unless-stopped
+    volumes:
+      - ./redis-data:/data
+    #command: redis-server --appendonly yes --requirepass ${REDIS_PASS}
+    command: redis-server --save 3600 1 --requirepass ${REDIS_PASS}
+    networks:
+      - bot_net
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASS}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+  postgres:
+    image: postgres:15-alpine
+    container_name: raglabel_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: raglabel
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: qwerty12345postgresql
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks: [bot_net]
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: raglabel_rabbitmq
+    ports:
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: qwertyguest
+      RABBITMQ_DEFAULT_PASS: qwertyguest
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks: [bot_net]
+  bot:
+    build: .
+    container_name: raglabel_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - bot_net
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma-data:/app/chroma_data
+networks:
+  bot_net:
+    driver: bridge
+volumes:
+  postgres-data:
+  rabbitmq-data:
+  chroma-data:

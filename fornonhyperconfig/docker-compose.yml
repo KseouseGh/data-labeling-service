@@ -1,0 +1,64 @@
+version: '3.8'
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: craftstream_redis
+    restart: unless-stopped
+    volumes:
+      - ./redis-data:/data
+    #command: redis-server --appendonly yes --requirepass ${REDIS_PASS}
+    command: redis-server --save 3600 1 --requirepass ${REDIS_PASS}
+    networks:
+      - bot_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASS}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+  celery-worker:
+    build: ./celery
+    command: celery -A tasks worker --loglevel=info
+    env_file: .env
+    depends_on: [rabbitmq, redis, postgres]
+    networks: [bot_net]
+  celery-beat:
+    build: ./celery
+    command: celery -A tasks beat --loglevel=info
+    env_file: .env
+    depends_on: [rabbitmq]
+    networks: [bot_net]
+  postgres:
+    image: postgres:15-alpine
+    container_name: craftstream_postgres
+    environment:
+      POSTGRES_DB: craftstream
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: ${POSTGRES_PASS}
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+    networks: [bot_net]
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: craftstream_rabbitmq
+    ports:
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: qwertyguest
+      RABBITMQ_DEFAULT_PASS: qwertyguest
+    volumes:
+      - ./rabbitmq-data:/var/lib/rabbitmq
+    networks: [bot_net]
+  bot:
+    build: .
+    container_name: craftstream_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - bot_net
+networks:
+  bot_net:
+    driver: bridge

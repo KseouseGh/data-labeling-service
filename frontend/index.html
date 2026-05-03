@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Data labeling tool</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="header">
+    <h1>|Data labeling Service|</h1>
+    <p>Интеллектуальная система разметки данных</p>
+    <script src="script.js"></script>
+  </div><!-- Dataloader panel -->
+  <button onclick="logout()">[Выйти]</button>
+  <div style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+  <label style="font-weight: 500; display: block; margin-bottom: 8px;">Загрузить файлы с данным для разметки</label>
+  <input type="file" id="documentFile" accept=".pdf,.docx,.doc,.txt" style="margin-bottom: 10px;"/>
+  <button onclick="uploadDocument()" style="background: #27ae60; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">
+    *Загрузить и сохранить*
+  </button>
+  <div id="uploadStatus" style="margin-top: 10px; font-size: 0.9rem; color: #666;"></div>
+</div><!-- Session settings panel -->
+  <div class="setup-panel" id="setupPanel">
+    <label for="targetCount">Цель (выберите кол-во примеров для раз-ки от 1 до 100) = </label>
+    <input type="number" id="targetCount" value="5" min="1" max="100" />
+    <button onclick="startSession()">* Начать разметку ▶*</button>
+    <div id="setupError" class="error hidden"></div>
+  </div><!-- Chat-layer -->
+  <div class="chat-container" id="chatContainer">
+    <div class="progress-bar">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+    <div class="progress-text" id="progressText">[0/0 примеров данных]</div>
+    <div id="messages"></div><!-- Feedback buttons -->
+    <div class="feedback-buttons" id="feedbackButtons">
+      <button class="like" onclick="sendFeedback('like')">👍 Верно![like]</button>
+      <button class="dislike" onclick="sendFeedback('dislike')">👎 Неверно![dislike]</button>
+      <button class="edit" onclick="toggleTextEdit()">✏️ Расширенный отзыв![edit]</button>
+    </div><!-- Editable feedback -->
+    <div class="text-feedback" id="textFeedback">
+      <textarea id="feedbackText" placeholder="Введите текст..."></textarea>
+      <button onclick="sendTextFeedback()">Отправить отзыв!</button>
+    </div><!-- Export -->
+    <div class="export-panel" id="exportPanel">
+      <p>Разметка завершена! Можно экспортировать датасет в [JSONL].</p>
+      <button onclick="exportDataset()">[Скачать Golden Set (JSONL-format)]</button>
+    </div>
+  </div>
+</body>
+</html>
