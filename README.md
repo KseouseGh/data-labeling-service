@@ -8,7 +8,7 @@
 ```
 ┌─────────────┐         HTTP-API         ┌──────────────┐    async/await   ┌──────── ──────┐
 │  Frontend   │ ◄──────────────────────► │   FastAPI    │ ◄──────────────► │   LLM, NLI    │
-│ Vanilla hxJS│                          │  Backend    │                   │(OpenRouter p.)│
+│ Vanilla hcJS│                          │  Backend    │                   │(OpenRouter p.)│
 └─────────────┘                          └─────────────┘                     ──────────────┘
                                                 /│\
                                        ┌────────┴────────┐
