@@ -6,7 +6,7 @@
 
 # Architecture
 ```
-┌─────────────┐         HTTP-API         ┌──────────────┐    async/await   ┌──────── ──────┐
+┌─────────────┐         REST-API         ┌──────────────┐    async/await   ┌──────── ──────┐
 │  Frontend   │ ◄──────────────────────► │   FastAPI    │ ◄──────────────► │   LLM, NLI    │
 │ Vanilla hcJS│                          │  Backend    │                   │(OpenRouter p.)│
 └─────────────┘                          └─────────────┘                     ──────────────┘
