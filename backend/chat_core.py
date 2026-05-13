@@ -12,6 +12,9 @@ from backend.nliclient import NLIClient
 import re
 from backend.schematic import SyntheticExample
 from pydantic import ValidationError
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
 
 logger = logging.getLogger(__name__)
 ai_client = AsyncOpenAI(
@@ -23,8 +26,21 @@ nli_client = NLIClient(
     base_url="https://openrouter.ai/api/v1",
     api_key=config.OPENAI_API_KEY,
     model="meta-llama/llama-3.2-1b-instruct"
+)# For nli may work model="cross-encoder/nli-distilroberta-base"!
+llm = ChatOpenAI(
+    openai_api_base="https://openrouter.ai/api/v1",
+    openai_api_key=config.OPENAI_API_KEY,
+    model="gpt-4o-mini",
+    temperature=0.2,
+    async_client=ai_client # Client-con. i. ready!
 )
-# For nli may work model="cross-encoder/nli-distilroberta-base"!
+parser = JsonOutputParser(pydantic_object=SyntheticExample)
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "Ответом должен быть ТОЛЬКО валидный JSON без пояснений!\n{format_instructions}"),
+    ("user", "Фрагмент документа: \n{chunk}"),
+])
+generation_chain = prompt | llm | parser
+
 def get_chroma_client():
     from db.dbvector import collection
     return collection  # Mock-getter of collection!
@@ -68,87 +84,25 @@ class AnnotationSession:
         return self.pending_chunks.pop(0) if self.pending_chunks else None
 
 async def generate_synthetic_example(chunk: str) -> Optional[Dict[str, Any]]:
-    """Example generation for pipeline with structured output using!"""
-    try:
-        prompt = SYSTEM_PROMPT.format(chunk=chunk[:CHUNK_SIZE])
-        completion = await ai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "Ответом должен быть ТОЛЬКО валидный JSON без пояснений!"},
-                {"role": "user", "content": prompt}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.2,
-        )
-        content = completion.choices[0].message.content.strip()
-        
-        if not content:
-            print("### ERROR: LLM returned empty content ###", flush=True)
-            logger.error("LLM returned empty content")
-            return None
-        print(f"### RAW: {repr(content[:300])} ###", flush=True)
-        logger.error(f"### RAW: {repr(content[:300])} ###")
-        clean = re.sub(r'^```(?:json)?\s*|\s*```$', '', content, flags=re.MULTILINE)
-        match = re.search(r'\{[\s\S]*\}', clean)
-        if not match:
-            print("### ERROR: No JSON object found ###", flush=True)
-            logger.error("No JSON object found")
-            return None
-        clean = match.group(0).strip()
-        
-        print(f"### CLEAN: {repr(clean[:300])} ###", flush=True)
-        logger.error(f"### CLEAN: {repr(clean[:300])} ###")
-
-        try:
-            data = json.loads(clean)
-        except json.JSONDecodeError:
-            fixed = clean.replace('\n', '\\n').replace('\r', '\\r')
-            try:
-                data = json.loads(fixed)
-            except Exception as e2:
-                print(f"### JSON ERROR: {e2} ###", flush=True)
-                logger.error(f"JSON decode failed: {e2}")
-                return None
-        
-        if isinstance(data, dict):
-            clean_data = {}
-            for k, v in data.items():
-                clean_key = str(k).strip().strip('"').strip("'").strip()
-                clean_key = ''.join(c for c in clean_key if c not in '\n\r\t')
-
-                if clean_key:
-                    clean_data[clean_key] = v
-            data = clean_data
-
-            print(f"### KEYS: {list(data.keys())} ###", flush=True)
-            logger.error(f"### KEYS: {list(data.keys())} ###")
-
-        if not isinstance(data, dict) or "question" not in data or "answer" not in data:
-            print(f"### MISSING FIELDS: {list(data.keys()) if isinstance(data, dict) else 'not a dict'} ###", flush=True)
-            logger.error(f"Missing required fields. Got: {list(data.keys()) if isinstance(data, dict) else 'not a dict'}")
-            return None
-        try:
-            example = SyntheticExample.model_validate(data)
-        except KeyError as ke:
-            print(f"### PYDANTIC KEYERROR: {repr(ke)} ###", flush=True)
-            print(f"### DATA KEYS: {list(data.keys())} ###", flush=True)
-            logger.error(f"Pydantic KeyError: {ke}, keys: {list(data.keys())}")
-            return None
-        print(f"### SUCCESS: {example.question[:50]} ###", flush=True)
-        logger.error(f"### SUCCESS: {example.question[:50]} ###")
-
+    """Example generation using LangChain structured output parsing."""
+    try: # Pipeline = prompt → LLM → Pydanticso!
+        result = await generation_chain.ainvoke({
+            "chunk": chunk[:CHUNK_SIZE],
+            "format_instructions": parser.get_format_instructions()
+        })
+        logger.info(f"### LANGCHAIN SUCCESS: {result.get('question', '')[:50]} ###")
+        print(f"### LANGCHAIN SUCCESS: {result.get('question', '')[:50]} ###", flush=True)
         return {
             "chunk": chunk,
-            "question": str(example.question).strip(),
-            "answer": str(example.answer).strip(),
-            "confidence": float(example.confidence),
-            "source_span": str(example.source_span or "").strip(),
+            "question": str(result["question"]).strip(),
+            "answer": str(result["answer"]).strip(),
+            "confidence": float(result.get("confidence", 0.5)),
+            "source_span": str(result.get("source_span", "")).strip(),
             "status": "pending"
         }
-
-    except Exception as e:
-        print(f"### GLOBAL EXCEPTION: {type(e).__name__}: {e} ###", flush=True)
-        logger.error(f"Generation failed: {type(e).__name__}: {e}")
+    except Exception as e: # Automated error-tracing with Langchain!
+        logger.error(f"### LANGCHAIN ERROR: {type(e).__name__}: {e} ###")
+        print(f"### LANGCHAIN ERROR: {type(e).__name__}: {e} ###", flush=True)
         return None
 
 async def verify_annotation(
@@ -161,7 +115,7 @@ async def verify_annotation(
     Checking for answer from client's feedback for contradiction with Knowledge base, returns NLI-analisys result!
     """
     if not existing_chunks:
-        existing_chunks = search_memories(user_id=user_id, query=user_answer, k=3)
+        existing_chunks = await search_memories(user_id=user_id, query=user_answer, k=3)
 
     conflicts = []
     for chunk in existing_chunks:
