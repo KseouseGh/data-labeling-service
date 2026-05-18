@@ -24,7 +24,7 @@ ai_client = AsyncOpenAI(
 # Global client-object for service!
 nli_client = NLIClient(
     api_key=config.EMBEDDER_API_KEY,
-    model="cross-encoder/nli-deberta-v3-base"
+    model="MoritzLaurer/deberta-v3-base-mnli-fever-anli"
 )# For nli may work model="cross-encoder/nli-distilroberta-base"!
 #llm = ChatOpenAI(
 #    openai_api_base="https://openrouter.ai/api/v1",

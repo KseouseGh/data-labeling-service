@@ -36,5 +36,15 @@ def run_nli_validation_task(self, user_id: int, examples: list):
 
     except Exception as exc:
         logger.error(f"[Celery] Ошибка валидации | user={user_id} | {exc}!")
-        status_redis.set(status_key, "error", ex=1800)
+        try:
+            status_redis.delete(status_key)
+            status_redis.delete(result_key)
+
+            logger.info(f"[Celery] Validation status reset for user={user_id} after error")
+        except Exception as redis_err:
+            logger.warning(f"[Celery] Failed to reset Redis keys: {redis_err}")
+        if "400" in str(exc) or "Invalid input" in str(exc):
+            logger.error(f"[Celery] Critical error, not retrying: {exc}")
+            # No retry if error while NLI-validation was critical and key get outdated!
+            return {"status": "failed", "error": str(exc)}
         raise self.retry(exc=exc)
