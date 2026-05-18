@@ -21,10 +21,10 @@ ai_client = AsyncOpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=config.OPENAI_API_KEY
 )
+# Global client-object for service!
 nli_client = NLIClient(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=config.OPENAI_API_KEY,
-    model="meta-llama/llama-3.2-1b-instruct"
+    api_key=config.EMBEDDER_API_KEY,
+    model="cross-encoder/nli-deberta-v3-base"
 )# For nli may work model="cross-encoder/nli-distilroberta-base"!
 #llm = ChatOpenAI(
 #    openai_api_base="https://openrouter.ai/api/v1",

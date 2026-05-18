@@ -3,77 +3,72 @@ from typing import Optional, List, Dict, Any
 import json
 import logging
 import config
+import urllib.parse
+import httpx
 
 logger = logging.getLogger(__name__)
 class NLIClient:
     """NLI-client from API and model. Using for classification: entailment / contradiction / neutral.!"""
-    def __init__(self, api_key: str, model: str, base_url: str = "https://openrouter.ai/api/v1"):
-        self.client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=base_url
-        )
+    def __init__(self, api_key: str, model: str, base_url: str = None): # Base_url optional with hf-configuration!
+        self.api_key = api_key
         self.model = model
+        encoded_model = urllib.parse.quote(model, safe="")
+        self.api_url = f"https://router.huggingface.co/hf-inference/models/{encoded_model}" # Encoder-based model!
         self.temperature = 0.0
         
     async def check_contradiction(
         self, 
         premise: str, 
         hypothesis: str,
-        max_tokens: int = 50
-      ) -> Dict[str, Any]:
-        """
-        Сравнивает два утверждения и возвращает тип связи + уверенность.
-        Returns:
-            {"label": "entailment" | "contradiction" | "neutral", "score": float}
-        """
-        NLI_prompt = """Ты классификатор логических отношений между утверждениями.
-        Твоя задача: сравнить Premise и Hypothesis и определить их связь.
-        Возможные ответы (строго одно):
-        - "entailment": Hypothesis логически следует из Premise
-        - "contradiction": Hypothesis противоречит Premise  
-        - "neutral": связь неочевидна или утверждения о разном
-        Верни ТОЛЬКО валидный JSON без пояснений:
-        {"label": "entailment|contradiction|neutral", "score": 0.0-1.0}
-        Где score — твоя уверенность в ответе (0.0=не уверен, 1.0=абсолютно уверен)."""
-        user_prompt = f"""Premise: "{premise[:500]}"
-        Hypothesis: "{hypothesis[:500]}"
-        Классифицируй:"""
+        max_tokens: int = 50 # Ignored param for classification!
+       ) -> Dict[str, Any]:
+        """Сравнивает два утверждения через HF Cross-Encoder. Returns:
+        {"label": "entailment" | "contradiction" | "neutral", "score": float}!
+        """        
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": NLI_prompt},
-                    {"role": "user", "content": user_prompt}
-                ]
-                ,
-                response_format={"type": "json_object"},
-                temperature=self.temperature,
-                max_tokens=max_tokens,
-                extra_headers={
-                    "HTTP-Referer": "https://github.com/KseouseGh/AI-data-labeling-Service",
-                    "X-Title": "AI data labeling Service"
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    self.api_url,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                json={
+                    "inputs": {
+                        "text": premise[:512],
+                        "text_pair": hypothesis[:512]
+                    }
                 }
-            )
-            content = response.choices[0].message.content
-            result = json.loads(content)
-            label = result.get("label", "neutral").lower()
-            score = float(result.get("score", 0.5))
-            
-            if label not in ("entailment", "contradiction", "neutral"):
-                logger.warning(f"Unexpected NLI label: {label}, defaulting to neutral")
-                label = "neutral"
-            score = max(0.0, min(1.0, score))
-            return {"label": label, "score": score}
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"NLI JSON parse error: {e}, raw: {content}")
+                )
+                response.raise_for_status()
+                result = response.json()
+                # Config of hf-using returns list [{"label": "...", "score": 0.95}, ...]!
+                if isinstance(result, list) and len(result) > 0:
+                    best = max(result, key=lambda x: x["score"])
+                    label = best["label"].lower()
+                    score = float(best["score"]) # Normalization of labels!
+                    label_map = {
+                        "entailment": "entailment",
+                        "contradiction": "contradiction",
+                        "neutral": "neutral"
+                    }
+                    clean_label = label_map.get(label, "neutral")
+                    score = max(0.0, min(1.0, score))
+                    return {"label": clean_label, "score": score}
+                # Fallback for error of request NLI-checking!
+                logger.warning(f"Unexpected NLI response: {result}!")
+                return {"label": "neutral", "score": 0.5}
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 400: # Logging body of NLI-model's response!
+                try:
+                    error_body = e.response.json()
+                    logger.error(f"NLI API 400 error body: {error_body}!")
+                except:
+                    logger.error(f"NLI API 400 error text: {e.response.text[:500]}!")
+            if e.response.status_code == 503:
+                logger.warning("NLI model loading (503), returning neutral")
+            logger.error(f"NLI API error: {e}!")
             return {"label": "neutral", "score": 0.0}
         except Exception as e:
-            logger.error(f"NLI API error: {e}")
+            logger.error(f"NLI API error: {e}!")
             return {"label": "neutral", "score": 0.0}
-# Global client-object for service!
-nli_client = NLIClient(
-    api_key=config.OPENAI_API_KEY,
-    model="meta-llama/llama-3.2-1b-instruct",
-    base_url="https://openrouter.ai/api/v1"
-)

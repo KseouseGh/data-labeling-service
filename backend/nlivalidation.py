@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from typing import List, Dict, Any
-from backend.nliclient import nli_client
+from backend.chat_core import nli_client
 from db.dbvector_model import search_memories
 import config
 

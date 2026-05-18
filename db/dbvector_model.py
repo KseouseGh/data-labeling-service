@@ -70,7 +70,7 @@ async def search_memories(user_id: int, query: str, k: int = 5) -> list:
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=k,
-        where={"user_id": user_id}
+        where={"user_id": user_id} # In produc. ver. must be filter by acc_id&doc_id for consistent NLI-validation!
     )# Returns "facts-text"!
     return results["documents"][0] if results["documents"] else []
 
