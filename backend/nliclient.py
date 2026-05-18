@@ -2,6 +2,7 @@ from openai import AsyncOpenAI
 from typing import Optional, List, Dict, Any
 import json
 import logging
+import config
 
 logger = logging.getLogger(__name__)
 class NLIClient:
@@ -70,3 +71,9 @@ class NLIClient:
         except Exception as e:
             logger.error(f"NLI API error: {e}")
             return {"label": "neutral", "score": 0.0}
+# Global client-object for service!
+nli_client = NLIClient(
+    api_key=config.OPENAI_API_KEY,
+    model="meta-llama/llama-3.2-1b-instruct",
+    base_url="https://openrouter.ai/api/v1"
+)

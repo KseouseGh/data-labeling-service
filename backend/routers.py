@@ -17,8 +17,14 @@ from backend.auth import get_password_hash, verify_password, create_access_token
 from db.db import async_session as sql_session
 from db.db_model import UserProfile
 from sqlalchemy import select
+from celery_data.app import celery_app
+from celery_data.tasks import run_nli_validation_task
+import redis.asyncio as redis
+import config
+import json
 
 auth_router = APIRouter(prefix="/auth", tags=["auth"])
+status_redis=redis.from_url(config.REDIS_URL, decode_responses=True)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()# In-memory as demo!{user_id: {"target": int, "current": int, "session": AnnotationSession, "queue": List[str]}}
@@ -154,6 +160,7 @@ async def submit_feedback(req: FeedbackRequest, background_tasks: BackgroundTask
         "dislike": "reject",
         "text": "edit"
     }
+
     status = feedback_map[req.feedback_type]
     edited_answer = req.text_feedback if req.feedback_type == "text" else None
     result = await submit_annotation(
@@ -176,14 +183,11 @@ async def submit_feedback(req: FeedbackRequest, background_tasks: BackgroundTask
             if session_data["current"] < session_data["target"]
             else " calling command /export to download dataset!"
             )
-    }
-    if result["status"] == "conflict_detected":
-        response["warning"] = "Обнаружено противоречие (заглушка: в следующей версии будет детализация.)!"
-    
+    }    
     return response
 
 @router.post("/export")
-async def export_dataset(req: ExportRequest, user_id: int = Depends(get_current_user)):
+async def export_dataset(req: ExportRequest, skip_validation: bool = False, user_id: int = Depends(get_current_user)):
     if user_id not in _active_sessions:
         raise HTTPException(status_code=404, detail="Session is not founded!")
     session_data = _active_sessions[user_id]
@@ -193,14 +197,38 @@ async def export_dataset(req: ExportRequest, user_id: int = Depends(get_current_
             status_code=400,
             detail=f"Не размечено нужное кол-во пр-ров: {session_data['current']}/{session_data['target']}!"
         )
+    
+    if not skip_validation:
+        status_key = f"nli:status:{user_id}"
+        validation_status = await status_redis.get(status_key)
+        if validation_status in ("processing", "queued"):
+            raise HTTPException(
+                status_code=409,
+                detail="Validation in progress. Waiting//|/"
+            )
+        if validation_status == "failed": #Getting details of conflict!
+            result_key = f"nli:result:{user_id}"
+            result_raw = await status_redis.get(result_key)
+            result = json.loads(result_raw) if result_raw else {}
+            raise HTTPException(
+                status_code=409,
+                detail=f"Validation failed: {result.get('message', 'Conflicts detected')}",
+                headers={"X-NLI-Conflicts": json.dumps(result.get("conflicts", []), ensure_ascii=False)}
+            )
+        # If validation passed and there's no key-data!
     dataset = await export_golden_set(session_data["session"], format=req.format)
     
     if dataset == "(*)":
-        raise HTTPException(status_code=404, detail="No data for export!")#If notmocked-var it FileResponse!
+        raise HTTPException(status_code=404, detail="No data for export!")
+    if not skip_validation:
+        await status_redis.delete(f"nli:status:{user_id}", f"nli:result:{user_id}")
+    
     return {
         "format": req.format,
         "count": len(dataset.strip().split("\n")),
-        "data": dataset
+        "data": dataset,
+        "validation_bypassed": skip_validation,
+        "message": "Dataset exported successfully"
     }
 
 @router.delete("/session/{user_id}")
@@ -256,3 +284,67 @@ async def login(req: AuthPayload):
 
     token = create_access_token(user.user_id, user.username)
     return {"access_token": token, "token_type": "bearer", "user_id": user.user_id}
+
+@router.post("/session/validate/start")
+async def start_validation(user_id: int = Depends(get_current_user)):
+    """Start for NLI-validation celery-task!"""
+    if user_id not in _active_sessions:
+        raise HTTPException(status_code=404, detail="No active session for this user")
+
+    session_data = _active_sessions[user_id] # Getting session-data!
+    examples = [
+        h["example"] for h in session_data["session"].history 
+        if h["example"]["status"] in ("accept", "edit")
+    ]
+    
+    if not examples:
+        raise HTTPException(status_code=400, detail="No verified examples to validate")
+
+    task = run_nli_validation_task.delay(user_id, examples)
+    session_data["nli_task_id"] = task.id
+    session_data["nli_status"] = "processing"
+    logger.info(f"Validation started: user={user_id}, task_id={task.id}")
+    return {
+        "status": "queued",
+        "task_id": task.id,
+        "message": "NLI validation started in background. Poll /session/validate/status for updates."
+    }
+
+@router.get("/session/validate/status")
+async def get_validation_status(user_id: int = Depends(get_current_user)):
+    """Validation-status getting from Redis-key generated by celery-worker!"""
+    status_key = f"nli:status:{user_id}"
+    result_key = f"nli:result:{user_id}"
+    # Status-check!
+    status = await status_redis.get(status_key)
+    if not status:
+        # Checking for active session!
+        if user_id in _active_sessions and "nli_task_id" in _active_sessions[user_id]:
+            return {"status": "queued", "message": "Task is in queue"}
+        raise HTTPException(status_code=404, detail="No validation task found")
+
+    if status in ("passed", "failed", "error"):
+        result_raw = await status_redis.get(result_key)
+        result = json.loads(result_raw) if result_raw else {}
+        return {
+            "status": status,
+            "stage": result.get("stage"),
+            "conflicts": result.get("conflicts", []),
+            "message": result.get("message", "")
+        }
+    return {"status": status, "message": "Validation in progress"}
+# Router for  checking new status of Q&A-example on verification!
+@router.delete("/session/validate")
+async def reset_validation(user_id: int = Depends(get_current_user)):
+    status_key = f"nli:status:{user_id}"
+    result_key = f"nli:result:{user_id}"
+    await status_redis.delete(status_key, result_key) # Old-data keys collector!
+    # Flag-off!
+    if user_id in _active_sessions:
+        _active_sessions[user_id].pop("nli_task_id", None)
+        _active_sessions[user_id]["nli_status"] = None
+    logger.info(f"Validation status reset for user {user_id}")
+    return {
+        "status": "reset",
+        "message": "Validation status cleared. You can now restart validation via /session/validate/start"
+    }

@@ -33,17 +33,20 @@ services:
       timeout: 5s
       retries: 5
     networks: [bot_net]
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
-    container_name: raglabel_rabbitmq
-    ports:
-      - "15672:15672"
+  celery_worker:
+    build: .
+    command: celery -A celery_data.app worker --loglevel=info --concurrency=2
+    depends_on:
+      - redis
+      - postgres
     environment:
-      RABBITMQ_DEFAULT_USER: qwertyguest
-      RABBITMQ_DEFAULT_PASS: qwertyguest
+      - REDIS_URL=${REDIS_URL}
+      - DBURL=${DBURL}
+      - CHROMA_PERSIST_DIR=/app/chroma-data
     volumes:
-      - rabbitmq-data:/var/lib/rabbitmq
+      - chroma-data:/app/chroma-data
     networks: [bot_net]
+    restart: unless-stopped
   bot:
     build: .
     container_name: raglabel_bot
@@ -58,7 +61,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - chroma-data:/app/chroma_data
+      - chroma-data:/app/chroma-data
 networks:
   bot_net:
     driver: bridge

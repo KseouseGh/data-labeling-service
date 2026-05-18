@@ -42,10 +42,21 @@
       <textarea id="feedbackText" placeholder="Введите текст..."></textarea>
       <button onclick="sendTextFeedback()">Отправить отзыв!</button>
     </div><!-- Export -->
-    <div class="export-panel" id="exportPanel">
-      <p>Разметка завершена! Можно экспортировать датасет в [JSONL].</p>
-      <button onclick="exportDataset()">[Скачать Golden Set (JSONL-format)]</button>
-    </div>
+    <!-- Export & Validation Panel -->
+  <div class="export-panel" id="exportPanel">
+  <p>Разметка завершена! Выберите способ экспорта:</p>
+  <button onclick="startValidation()" class="btn-validate" style="background: #3498db; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; margin: 10px 5px; font-weight: 600;">
+    [Проверить на согласованность данных и скачать Golden Set (*JSONL-format)]
+  </button>
+  <button onclick="exportDataset()" class="btn-export" style="background: #27ae60; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; margin: 10px 5px;">
+    [Скачать Golden Set (JSONL-format)]
+  </button>
+  <div id="validationStatus" class="validation-status" style="display: none; margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #3498db;">
+    <h4 style="margin: 0 0 10px 0;"> Статус проверки </h4>
+    <p id="validationText" style="margin: 0; font-size: 1.1rem; font-weight: 500;">Инициализация...*</p>
+    <div id="conflictsContainer" style="margin-top: 15px;"></div>
+  </div>
+  </div>
   </div>
 </body>
 </html>

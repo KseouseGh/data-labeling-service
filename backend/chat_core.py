@@ -21,18 +21,23 @@ ai_client = AsyncOpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=config.OPENAI_API_KEY
 )
-RedisStorage=123
 nli_client = NLIClient(
     base_url="https://openrouter.ai/api/v1",
     api_key=config.OPENAI_API_KEY,
     model="meta-llama/llama-3.2-1b-instruct"
 )# For nli may work model="cross-encoder/nli-distilroberta-base"!
+#llm = ChatOpenAI(
+#    openai_api_base="https://openrouter.ai/api/v1",
+#    openai_api_key=config.OPENAI_API_KEY,
+#    model="gpt-4o-mini",
+#    temperature=0.2,
+#    async_client=ai_client # Client-con. i. ready!
+#)
 llm = ChatOpenAI(
-    openai_api_base="https://openrouter.ai/api/v1",
-    openai_api_key=config.OPENAI_API_KEY,
+    base_url="https://openrouter.ai/api/v1",
+    api_key=config.OPENAI_API_KEY,
     model="gpt-4o-mini",
-    temperature=0.2,
-    async_client=ai_client # Client-con. i. ready!
+    temperature=0.2 # Langchained client con. us.!
 )
 parser = JsonOutputParser(pydantic_object=SyntheticExample)
 prompt = ChatPromptTemplate.from_messages([
@@ -43,7 +48,7 @@ generation_chain = prompt | llm | parser
 
 def get_chroma_client():
     from db.dbvector import collection
-    return collection  # Mock-getter of collection!
+    return collection  # Getter of true global DBV-collection by singleton, sav. f. concurrency!
 
 chroma = get_chroma_client()
 CHUNK_SIZE = config.CHUNK_SIZE
@@ -101,8 +106,8 @@ async def generate_synthetic_example(chunk: str) -> Optional[Dict[str, Any]]:
             "status": "pending"
         }
     except Exception as e: # Automated error-tracing with Langchain!
-        logger.error(f"### LANGCHAIN ERROR: {type(e).__name__}: {e} ###")
-        print(f"### LANGCHAIN ERROR: {type(e).__name__}: {e} ###", flush=True)
+        logger.error(f"### LANGCHAIN ERROR: {type(e).__name__}: {e} ###!")
+        print(f"### LANGCHAIN ERROR: {type(e).__name__}: {e} ###!", flush=True)
         return None
 
 async def verify_annotation(
@@ -110,13 +115,13 @@ async def verify_annotation(
     user_answer: str,
     original_chunk: str,
     existing_chunks: Optional[List[str]] = None
-  ) -> Dict[str, Any]:
+  ) -> Dict[str, Any]: # NLI-analisys results in a dict!
     """
     Checking for answer from client's feedback for contradiction with Knowledge base, returns NLI-analisys result!
     """
     if not existing_chunks:
         existing_chunks = await search_memories(user_id=user_id, query=user_answer, k=3)
-
+    # Storage for conflicts-fragments!
     conflicts = []
     for chunk in existing_chunks:
         nli_result = await nli_client.check_contradiction(
@@ -144,20 +149,6 @@ async def submit_annotation(
     user_id: Optional[int] = None
   ) -> Dict[str, Any]:
     target_answer = edited_answer if edited_answer else example["answer"]
-    # Countradaction-check if user give unagreed feedback!
-    if user_feedback == "edit" and edited_answer:
-        verification = await verify_annotation(
-            user_id=user_id,
-            user_answer=edited_answer,
-            original_chunk=example["chunk"]
-        )
-        if verification["has_conflict"]:
-            return {
-                "status": "conflict_detected",
-                "conflicts": verification["conflicts"],
-                "example": example,
-                "user_answer": target_answer
-            }
     # In-memory update for demonstration!
     example["status"] = user_feedback
     if edited_answer:
@@ -188,18 +179,10 @@ async def submit_annotation(
                 }# Writing to the "summary" cell!
                 current = json.loads(conv.summary or "[]")
                 current.append(audit_entry)
-                conv.summary = json.dumps(current, ensure_ascii=False)
+                conv.summary = json.dumps(current, ensure_ascii=False) # Conv-logging in dict!
                 conv.message_count += 1
-                fact_content = f"Q: {example['question']}\nA: {target_answer}"
-                fact_id = await add_memory(
-                    user_id=user_id,
-                    content=fact_content,
-                    chunk_index=0,
-                    document_id="verified_feedback",
-                    timestamp=datetime.now().isoformat()
-                )
                 await db.commit() # Commit only for full interact-session!
-                logger.info(f"Annotation saved: user={user_id}, fact_id={fact_id}")
+                logger.info(f"Annotation saved: user={user_id}")
                 
             except Exception as e:
                 await db.rollback()
@@ -223,4 +206,4 @@ async def export_golden_set(session: AnnotationSession, format: str = "jsonl") -
             lines.append(json.dumps(record, ensure_ascii=False)
             )
         return "\n".join(lines)
-    return "(*)"# При миграции Qdrant заменить на AsyncQdrantClient и вынести генерацию эмбеддингов в поток/сервис.!!!
+    return "(*)"

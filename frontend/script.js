@@ -251,25 +251,133 @@ document.addEventListener('DOMContentLoaded', () => { // DOM-tree in-code ready!
         console.error('Upload error', error);
       }
     }
-    
-    async function exportDataset() {
-      if (!currentUserId) {
-        return;
-      }
+    // === NLI-VALIDATION FUNCTIONS ===
+    async function startValidation() {
+      const statusDiv = document.getElementById('validationStatus');
+      const statusText = document.getElementById('validationText');
+      const conflictsContainer = document.getElementById('conflictsContainer');
+      statusDiv.style.display = 'block';
+      statusText.textContent = 'Запуск проверки NLI-валидации датасета...';
+      conflictsContainer.innerHTML = '';
+      
       try {
-        const result = await apiRequest('/export', 'POST', { format: 'jsonl' });
-        const blob = new Blob([result.data], { type: 'application/jsonl' });
-        const url = URL.createObjectURL(blob);
+        const startResp = await fetch(`${API_BASE}/session/validate/start`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (!startResp.ok) {
+          throw new Error('Ошибка запуска валидации: ' + await startResp.text());
+        }
+        
+        const startData = await startResp.json();
+        statusText.textContent = 'Проверка запущена (ID: ' + startData.task_id.slice(0, 8) + '...)';
+        pollValidationStatus();
+        
+      } catch (error) {
+        statusText.textContent = 'Ошибка ' + error.message + '!';
+        statusText.style.color = '#e74c3c';
+      }
+    }
+
+    async function pollValidationStatus() {
+      const statusText = document.getElementById('validationText');
+      const conflictsContainer = document.getElementById('conflictsContainer');
+      try {
+        const resp = await fetch(`${API_BASE}/session/validate/status`, {
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        const data = await resp.json();
+        
+        if (data.status === 'processing' || data.status === 'queued') {
+          statusText.textContent = 'Идёт проверка...';
+          setTimeout(pollValidationStatus, 2000);
+        } else if (data.status === 'passed') {
+          statusText.textContent = 'Все примеры прошли проверку! Датасет не содержит противоречий.';
+          statusText.style.color = '#27ae60';
+          setTimeout(() => exportDataset(), 1000);
+        } else if (data.status === 'failed') {
+          statusText.textContent = 'Обнаружены противоречия!';
+          statusText.style.color = '#e74c3c';
+
+          if (data.conflicts && data.conflicts.length > 0) {
+            conflictsContainer.innerHTML = '<h5>Найдено конфликтов: ' + data.conflicts.length + '</h5>!';
+            data.conflicts.forEach((conflict, idx) => {
+              const conflictDiv = document.createElement('div');
+              conflictDiv.className = 'conflict-item';
+              conflictDiv.style.cssText = 'background: #fee; padding: 10px; margin: 10px 0; border-radius: 4px; border-left: 3px solid #e74c3c;';
+
+              if (conflict.type === 'local') {
+                conflictDiv.innerHTML = `
+                  <strong>Конфликт #${idx + 1}</strong><br/>
+                  <small>Примеры #${conflict.idx_1} и #${conflict.idx_2} противоречат друг другу!</small><br/>
+                  <code>${conflict.preview_1 || 'N/A'}</code><br/>
+                  <code>${conflict.preview_2 || 'N/A'}</code><br/>
+                  <em>Уверенность = ${(conflict.score * 100).toFixed(1)}%.</em>
+                `;
+              } else if (conflict.type === 'global') {
+                conflictDiv.innerHTML = `
+                  <strong>Конфликт #${idx + 1}</strong><br/>
+                  <small>Пример #${conflict.example_idx} противоречит источнику!</small><br/>
+                  <code>${conflict.preview_answer || 'N/A'}</code><br/>
+                  <em>Уверенность = ${(conflict.score * 100).toFixed(1)}%.</em>
+                `;
+              }
+              
+              conflictsContainer.appendChild(conflictDiv);
+            });
+            const retryBtn = document.createElement('button');
+            retryBtn.textContent = '[Отредактировать и проверить снова]';
+            retryBtn.style.cssText = 'background: #3498db;color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin-top: 15px;';
+            retryBtn.onclick = () => {
+              conflictsContainer.innerHTML = '';
+              statusText.textContent = 'Инициализация...';
+              statusText.style.color = '';
+              startValidation();
+            };
+            conflictsContainer.appendChild(retryBtn);
+          }
+        }
+      } catch (error) {
+        statusText.textContent = 'Ошибка проверки статуса ' + error.message + '!';
+        setTimeout(pollValidationStatus, 3000);
+      }
+    }
+
+    async function exportDataset() {
+      try {
+        const response = await fetch(`${API_BASE}/export`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ format: 'jsonl' })
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.detail || 'Ошибка экспорта');
+        }
+        
+        const data = await response.json();
+        const blob = new Blob([data.data], { type: 'application/jsonl' });
+        const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `golden_set_${currentUserId}_${Date.now()}.jsonl`;
+        a.download = `golden_set_${new Date().toISOString().slice(0,10)}.jsonl`;
         document.body.appendChild(a);
         a.click();
+        window.URL.revokeObjectURL(url);
         document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        addMessage(`{Датасет сформирован: ${result.count} записей.}`, true);        
+    
+        alert('Датасет сформирован: ' + data.count + ' примеров.');
+    
       } catch (error) {
-        addMessage(`Ошибка экспорта ${error.message}!`, true);
+        alert('Ошибка экспорта: ' + error.message + '!');
       }
     }
 
@@ -288,4 +396,5 @@ document.addEventListener('DOMContentLoaded', () => { // DOM-tree in-code ready!
     window.uploadDocument = uploadDocument;
     window.exportDataset = exportDataset;
     window.toggleTextEdit = toggleTextEdit;
+    window.startValidation = startValidation;
 });
